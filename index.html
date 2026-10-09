@@ -925,6 +925,10 @@ body {
 
 .lesson-btn {
 
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    position: relative;
+    z-index: 2;
     width: 100%;
 
     padding: 10px;
@@ -4421,18 +4425,113 @@ function openFirstLesson() {
 
 let currentLessonIndex = 0;
 let currentLessonId = null;
-function openLesson(lessonIndex = 0) {
-    const config = activeProfile ? languageExperiences[activeProfile.language] : null;
-    if (!config || !config.lessons.length) return;
-    const safeIndex = Math.max(0, Math.min(Number(lessonIndex) || 0, config.lessons.length - 1));
-    currentLessonIndex = safeIndex;
-    currentLessonId = config.lessons[safeIndex]?.id ?? null;
+function lessonContentToReadableText(value) {
+    if (value == null) return "";
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    if (Array.isArray(value)) return value.map(lessonContentToReadableText).filter(Boolean).join("\n\n");
+    if (typeof value === "object") {
+        for (const key of ["text", "markdown", "content", "body", "sections", "explanation", "lesson"]) {
+            if (value[key] != null) {
+                const nested = lessonContentToReadableText(value[key]);
+                if (nested) return nested;
+            }
+        }
+        return Object.entries(value).map(([key, child]) => {
+            const text = lessonContentToReadableText(child);
+            if (!text) return "";
+            const heading = key.replace(/[_-]+/g, " ").replace(/\b\w/g, ch => ch.toUpperCase());
+            return `### ${heading}\n${text}`;
+        }).filter(Boolean).join("\n\n");
+    }
+    return "";
+}
 
-    // Always start a newly opened lesson at the top on mobile and desktop.
-    // requestAnimationFrame also catches browsers that restore the previous scroll position after the page switch.
+/* If the interactive lesson renderer hits a runtime error, never leave the learner
+   with an empty card. Render the source lesson data in a safe, readable fallback. */
+function renderLessonEmergencyFallback(language, lesson, error) {
+    console.error(`Lesson rendering failed for ${language}:`, error);
+    try {
+        const section = document.getElementById("lesson-detail");
+        const root = document.getElementById("pythonInteractiveLesson");
+        const body = document.getElementById("pilStageBody");
+        if (!section || !root || !body || !lesson) return false;
+
+        section.querySelectorAll(":scope > .lesson-content > .content-box, :scope > .lesson-content > .challenge")
+            .forEach(el => { el.style.display = "none"; });
+        root.style.display = "block";
+        root.dataset.renderFallback = "true";
+
+        const title = String(lesson.title || `Untitled ${language} lesson`);
+        const description = String(lesson.description || `Learn the key idea in this ${language} lesson.`);
+        const rawContent = lesson.content ?? lesson.explanation ?? lesson.learn ?? lesson.lesson_content;
+        const lessonText = lessonContentToReadableText(rawContent).trim() || `### What you'll learn\n${description}\n\nRead the example, identify what each important line does, and predict what the program will display.`;
+        const code = String(lesson.code || lesson.starter_code || lesson.example_code || lesson.source_code || interactiveLanguageProfile(language).first || "");
+        const output = String(lesson.output || "Run the example to see the result.");
+
+        const stageTitle = document.getElementById("pilStageTitle");
+        const stageCount = document.getElementById("pilStageCount");
+        const progressBar = document.getElementById("pilProgressBar");
+        const back = document.getElementById("pilBack");
+        const next = document.getElementById("pilNext");
+        const feedback = document.getElementById("pilFeedback");
+        if (stageTitle) stageTitle.textContent = "Lesson Content";
+        if (stageCount) stageCount.textContent = "Reading view";
+        if (progressBar) progressBar.style.width = "100%";
+        if (back) { back.disabled = false; back.textContent = "← All Lessons"; back.onclick = () => showPage("lessons-page"); }
+        if (feedback) feedback.textContent = "The interactive steps could not initialize, so this lesson is shown in reading view.";
+
+        let formatted;
+        try { formatted = formatInteractiveLessonContent(lessonText); }
+        catch (_) { formatted = `<p>${escapeLessonHtml(lessonText).replace(/\n/g, "<br>")}</p>`; }
+        body.innerHTML = `<div class="pil-card pil-fallback-card">
+            <h3>${escapeLessonHtml(title)}</h3>
+            <p>${escapeLessonHtml(description)}</p>
+            <div class="pil-lesson-explanation">${formatted}</div>
+            <div class="teacher-example-heading"><span>💻</span><b>Example code</b><small>Read it line by line.</small></div>
+            <pre class="pil-code"><code>${escapeLessonHtml(code)}</code></pre>
+            <p style="margin-top:12px">Example result:</p>
+            <div class="pil-output">${escapeLessonHtml(output)}</div>
+          </div>`;
+        if (next) {
+            next.disabled = false;
+            next.textContent = "Return to Lessons →";
+            next.onclick = () => showPage("lessons-page");
+        }
+        return true;
+    } catch (fallbackError) {
+        console.error("Emergency lesson fallback also failed:", fallbackError);
+        return false;
+    }
+}
+
+function openLesson(lessonIndex = 0, lessonId = null) {
+    const language = activeProfile?.language;
+    const config = language ? languageExperiences?.[language] : null;
+    if (!config || !Array.isArray(config.lessons) || !config.lessons.length) {
+        console.error("Cannot open lesson: no curriculum is loaded for", language);
+        showPage("lessons-page");
+        return false;
+    }
+
+    // If the backend refreshes the cards between render and click, resolve by
+    // the lesson's stable database ID first, then fall back to the displayed index.
+    const matchedIndex = lessonId
+        ? config.lessons.findIndex(item => item?.id != null && String(item.id) === String(lessonId))
+        : -1;
+    const parsedIndex = Number.parseInt(lessonIndex, 10);
+    const requestedIndex = matchedIndex >= 0 ? matchedIndex : (Number.isFinite(parsedIndex) ? parsedIndex : 0);
+    const safeIndex = Math.max(0, Math.min(requestedIndex, config.lessons.length - 1));
+    const lesson = config.lessons[safeIndex] || config.lessons[0];
+    currentLessonIndex = safeIndex;
+    currentLessonId = lesson?.id ?? backendLessonIds?.[language]?.[safeIndex] ?? null;
+
+    // Navigate before rendering so a rendering problem cannot leave the click
+    // appearing to do nothing. Reset scroll on both mobile and desktop.
+    showPage("lesson-detail");
     const resetLessonScroll = () => {
         window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-        document.documentElement.scrollTop = 0;
+        if (document.documentElement) document.documentElement.scrollTop = 0;
         document.body.scrollTop = 0;
         const main = document.querySelector(".main");
         if (main) main.scrollTop = 0;
@@ -4446,9 +4545,28 @@ function openLesson(lessonIndex = 0) {
     pythonLessonMasteryScore = 0;
     pythonLessonChallengePassed = false;
     pythonLessonMasteryAnswered = new Set();
-    renderLessonDetail();
-    showPage("lesson-detail");
+    document.getElementById("lessonRenderError")?.remove();
+    try {
+        renderLessonDetail();
+    } catch (error) {
+        console.error(`Could not render ${language} lesson ${safeIndex + 1}:`, error);
+        const section = document.getElementById("lesson-detail");
+        let notice = document.getElementById("lessonRenderError");
+        if (!notice && section) {
+            notice = document.createElement("p");
+            notice.id = "lessonRenderError";
+            notice.setAttribute("role", "alert");
+            notice.style.cssText = "margin:12px 0;padding:12px 14px;border:1px solid #8b4550;border-radius:10px;background:#2a1720;color:#ffd2d8";
+            section.querySelector(".lesson-content")?.prepend(notice);
+        }
+        const renderErrorDetail = String(error?.message || error || "Unknown rendering error").slice(0, 160);
+        if (notice) notice.textContent = `The interactive ${language} lesson could not fully initialize. A readable lesson view has been opened below. Debug detail: ${renderErrorDetail}`;
+        renderLessonEmergencyFallback(language, lesson, error);
+    }
+    return true;
 }
+// Keep the handler explicitly available to any legacy controls that still call it inline.
+window.openLesson = openLesson;
 
 
 /* =========================
@@ -5191,6 +5309,7 @@ function buildCppTeacherLessons(){
     return {goal:`Understand ${lesson.title}.`,explain:`${lesson.description||''} Learn what problem this feature solves, then prove it with a small change.`,teacher:`Let's treat ${lesson.title} as a tool, not a definition. First understand why it exists, then use it.`,watch:`Predict the example before running it and identify the line responsible for the key behavior.`,mistake:`A common mistake is copying syntax without understanding its assumptions.`,mission:`Modify the example for one small new requirement while keeping the same ${lesson.title} idea.`,remember:`Key idea: ${lesson.title}.`};
   });
 }
+const cppTeacherLessons = buildCppTeacherLessons();
 
 /* =========================================================
    JAVA TEACHER MODE — 36 LESSON QUALITY LAYER
@@ -5599,6 +5718,17 @@ function openLearningModule(moduleIndex = 0) {
 function renderLessonCards(config) {
     const grid = document.getElementById("lessonGrid");
     if (!grid) return;
+    // Cards are replaced when the backend curriculum resolves. One delegated
+    // listener survives every replacement and reliably handles every language.
+    if (grid.dataset.lessonClickBound !== "true") {
+        grid.addEventListener("click", event => {
+            const button = event.target.closest?.("button.lesson-btn[data-lesson-index]");
+            if (!button || !grid.contains(button)) return;
+            event.preventDefault();
+            openLesson(button.dataset.lessonIndex, button.dataset.lessonId || null);
+        });
+        grid.dataset.lessonClickBound = "true";
+    }
     const progress = readProgress();
     const completed = new Set(progress[config.name] || []);
     let previousModuleId = null;
@@ -5620,7 +5750,7 @@ function renderLessonCards(config) {
             <div class="lesson-number">${completed.has(index) ? "✓ COMPLETED · " : ""}${config.name.toUpperCase()} · LESSON ${String(index + 1).padStart(2,"0")}</div>
             <h3>${lesson.title}</h3><p>${lesson.description}</p>
             <div class="lesson-meta"><span class="tag">${level}</span><span class="tag">${lesson.duration || "Self-paced"}</span></div>
-            <button class="lesson-btn" data-lesson-id="${lesson.id}" onclick="openLesson(${index})">${completed.has(index) ? "Review lesson →" : "Start lesson →"}</button>
+            <button type="button" class="lesson-btn" data-lesson-index="${index}" data-lesson-id="${lesson.id == null ? "" : escapeAttribute(lesson.id)}" onclick="openLesson(${index}); return false;" style="touch-action:manipulation;position:relative;z-index:2;">${completed.has(index) ? "Review lesson →" : "Start lesson →"}</button>
         </article>`;
     }).join("");
 }
@@ -5848,7 +5978,8 @@ function explainCodeLine(language, rawLine, lineNumber, lessonTitle) {
 }
 
 function renderLessonCodeWalkthrough(language, lesson) {
-    const lines = lesson.code.split(/\r?\n/);
+    const code = String(lesson?.code || lesson?.starter_code || lesson?.example_code || lesson?.source_code || interactiveLanguageProfile(language).first || "");
+    const lines = code.split(/\r?\n/);
     const rows = lines.map((line, index) => {
         if (!line.trim()) return "";
         const explanation = explainCodeLine(language, line, index + 1, lesson.title);
@@ -7405,6 +7536,28 @@ function lessonOutputForInteractive(code){
   return lesson?.output || 'Run the example to see the result.';
 }
 
+function formatInteractiveLessonContent(value){
+  // Supabase lesson content is authored as text/Markdown. Escape HTML first so
+  // C++ tokens such as <iostream> remain visible instead of being parsed as tags.
+  const escape = value => String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const inline = text => escape(text).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  const lines=String(value).replace(/\r/g,'').split('\n');
+  const out=[]; let paragraph=[]; let list=[];
+  const flushParagraph=()=>{if(paragraph.length){out.push('<p>'+paragraph.map(inline).join('<br>')+'</p>');paragraph=[];}};
+  const flushList=()=>{if(list.length){out.push('<ul>'+list.map(item=>'<li>'+inline(item)+'</li>').join('')+'</ul>');list=[];}};
+  for(const raw of lines){
+    const line=raw.trim();
+    if(!line){flushParagraph();flushList();continue;}
+    const heading=line.match(/^(#{1,3})\s+(.+)$/);
+    const bullet=line.match(/^(?:[-*•])\s+(.+)$/);
+    if(heading){flushParagraph();flushList();const level=Math.min(3,heading[1].length);out.push(`<h${level}>${inline(heading[2])}</h${level}>`);}
+    else if(bullet){flushParagraph();list.push(bullet[1]);}
+    else {flushList();paragraph.push(line);}
+  }
+  flushParagraph();flushList();
+  return out.join('') || '<p>No lesson explanation is available yet.</p>';
+}
+
 function interactiveLessonModel(){
   const language=activeProfile?.language;
   const config=languageExperiences?.[language];
@@ -7414,12 +7567,27 @@ function interactiveLessonModel(){
   const code=lesson.code || interactiveLanguageProfile(language).first;
   const topic=getInteractiveLessonTopic(lesson,language);
   const model=interactiveQuestionSet(language,topic,title,lesson.description||`This lesson teaches ${title}.`,code);
-  // Prefer the detailed curriculum content stored in Supabase. The previous
-  // version ignored lesson.content and replaced it with a generic topic blurb.
-  if (lesson.content && String(lesson.content).trim()) {
-    model.learn = String(lesson.content);
-    model.learnTitle = title;
+  // Prefer authored lesson content when present. Some curriculum entries only
+  // contain title/description/code, and the question bank may not define `learn`;
+  // without this fallback the Learn stage renders an empty explanation panel.
+  const authoredContent = lesson.content ?? lesson.explanation ?? lesson.learn ?? lesson.lesson_content;
+  if (authoredContent != null && String(authoredContent).trim()) {
+    model.learn = formatInteractiveLessonContent(authoredContent);
+  } else if (!model.learn || !String(model.learn).trim()) {
+    const teacher = getCurrentTeacherLesson();
+    const sections = [
+      `### What you'll learn\n${lesson.description || `Understand the main idea behind ${title}.`}`,
+      teacher?.explain ? `### Key idea\n${teacher.explain}` : '',
+      teacher?.watch ? `### Try this\n${teacher.watch}` : '',
+      teacher?.mistake ? `### Common mistake\n${teacher.mistake}` : '',
+      teacher?.remember ? `### Remember\n${teacher.remember}` : ''
+    ].filter(Boolean).join('\n\n');
+    model.learn = formatInteractiveLessonContent(sections || `### ${title}\nRead the description, trace the example code, and predict what it does before running it.`);
+  } else {
+    // The existing generated explanation is useful when a question-bank entry has one.
+    model.learn = formatInteractiveLessonContent(model.learn);
   }
+  model.learnTitle = model.learnTitle || title;
   return model;
 }
 
@@ -7454,7 +7622,9 @@ function renderPythonInteractiveLesson(){
       <div class="teacher-example-heading"><span>💻</span><b>See it in code</b><small>Read it before you run it.</small></div>
       <pre class="pil-code">${escapeLessonHtml(model.code)}</pre>
       <p style="margin-top:12px">Example result:</p>
-      <div class="pil-output">${escapeLessonHtml(model.output)}</div>
+      <div id="pilExampleOutput" class="pil-output">${escapeLessonHtml(model.output)}</div>
+      <button type="button" class="run-code-btn pil-run" onclick="runInteractiveLessonExample()">▶ Run Example</button>
+      <p class="pil-example-note" style="margin-top:8px">Run the example to see the actual output from the compiler. Examples that need input may ask for input or report that input is required.</p>
       ${teacher ? `<div class="teacher-next-step"><b>Before you continue:</b> ${escapeLessonHtml(teacher.watch)}</div>` : ""}
     </div>`;
     next.textContent='Make a prediction →'; next.disabled=false;
@@ -7483,6 +7653,29 @@ function pythonLessonPredict(index){
   document.querySelectorAll('#pilStageBody .pil-option').forEach((btn,i)=>{btn.disabled=true;btn.classList.toggle('correct',i===model.prediction.answer);btn.classList.toggle('wrong',i===index&&i!==model.prediction.answer);});
   const feedback=document.getElementById('pilFeedback'); feedback.textContent=index===model.prediction.answer?`Correct! ${model.prediction.why}`:`Not quite. ${model.prediction.why}`;
   const next=document.getElementById('pilNext');next.disabled=false;next.textContent='Try the code →';
+}
+
+async function runInteractiveLessonExample(){
+  const output=document.getElementById('pilExampleOutput');
+  const model=interactiveLessonModel();
+  if(!output||!model)return;
+  if(pythonLessonRunBusy){output.textContent='A program is already running. Please wait…';return;}
+  const language=activeProfile?.language||'Python';
+  const sourceCode=String(model.code||'').trim();
+  if(!sourceCode){output.textContent='This lesson does not have an example to run yet.';return;}
+  pythonLessonRunBusy=true;
+  output.textContent=`Running ${language} example…`;
+  try{
+    const data=await invokeShakFunction('run-code',{language,sourceCode,stdin:''});
+    const parts=[];
+    if(data.compileOutput)parts.push('COMPILE ERROR\n'+String(data.compileOutput).trim());
+    if(data.stderr)parts.push('ERROR\n'+String(data.stderr).trim());
+    if(data.stdout)parts.push(String(data.stdout).replace(/\n+$/,''));
+    if(data.message&&!data.stdout&&!data.stderr&&!data.compileOutput)parts.push(String(data.message).trim());
+    output.textContent=parts.join('\n\n')||'Program finished successfully with no output.';
+  }catch(e){
+    output.textContent='Could not run this example: '+(e?.message||'execution service unavailable. You can still read the expected result above when one is provided.');
+  }finally{pythonLessonRunBusy=false;}
 }
 
 async function runPythonLessonEditor(editorId,outputId){
