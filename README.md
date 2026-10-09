@@ -36,33 +36,6 @@
 4. Code submissions are sent through the backend's `run-code` flow to the Judge0 execution service.
 5. The app displays results and updates learning progress where applicable.
 
-## 🚀 Getting Started
-
-### 1. Get the source code
-
-Clone your GitHub repository, then open the project folder:
-
-```bash
-git clone <YOUR_REPOSITORY_URL>
-cd <YOUR_REPOSITORY_FOLDER>
-```
-
-Replace the placeholders with your actual repository URL and folder name.
-
-### 2. Open the frontend
-
-Open the project's main HTML entry point (for example, `index.html`) in a browser or use a local development server. If your repository uses a different entry point or build setup, follow that project's structure.
-
-### 3. Configure backend services
-
-To use backend-dependent features, configure the existing Supabase project and Edge Functions. Set required credentials and service URLs in the appropriate frontend configuration or backend secrets, according to the current implementation.
-
-- Configure Gemini credentials on the backend for Jarvis Tutor.
-- Configure the Judge0 endpoint/API credentials used by `run-code`.
-- Ensure Supabase authentication, database policies, and Edge Functions are deployed and configured.
-
-**Never place private API keys, service-role keys, or other secrets in frontend code or commit them to GitHub.** Public client configuration should only be used as intended by Supabase, with Row Level Security (RLS) and appropriate policies enabled.
-
 ## 🌐 Deployment
 
 Shak Code's frontend is deployed through Cloudflare. For updates to a Git-connected deployment:
