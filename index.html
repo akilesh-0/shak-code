@@ -960,10 +960,24 @@ body {
 ========================= */
 
 .lesson-content {
-
+    box-sizing: border-box;
+    width: 100%;
     max-width: 900px;
-
-    margin: auto;
+    margin: 0 auto;
+    padding: 0 18px 24px;
+}
+@media (max-width: 600px) {
+    #lesson-detail { padding-left: 0 !important; padding-right: 0 !important; }
+    #lesson-detail .lesson-content {
+        width: 100%;
+        max-width: none;
+        margin: 0;
+        padding: 0 12px 22px;
+    }
+    #lesson-detail .lesson-title { margin-bottom: 16px; }
+    #lesson-detail .lesson-title h1 { font-size: 27px; line-height: 1.2; }
+    #lesson-detail .content-box { padding: 16px 14px; margin-bottom: 14px; }
+    #lesson-detail .lesson-code-walkthrough { padding: 14px; }
 }
 
 .lesson-title {
@@ -2833,6 +2847,55 @@ body[data-language] .jarvis-nameplate span { background:#55eaff; }
   #home-page:not(.active-page) { display:none !important; }
 }
 </style>
+
+<style id="shakcode-mobile-full-width-lesson-fix">
+@media (max-width: 600px) {
+  /* Use almost the full screen width for the active lesson, not the generic page gutters. */
+  #lesson-detail {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  #lesson-detail .lesson-header {
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    padding-left: 10px !important;
+    padding-right: 10px !important;
+  }
+  #lesson-detail .lesson-content {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 5px 18px !important;
+    box-sizing: border-box !important;
+  }
+  #lesson-detail .content-box {
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    padding: 13px 11px !important;
+    border-radius: 12px !important;
+    margin-bottom: 12px !important;
+  }
+  #lesson-detail .lesson-teaching-room,
+  #lesson-detail .python-interactive-lesson {
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    padding: 11px !important;
+    border-radius: 13px !important;
+  }
+  #lesson-detail .blackboard-surface,
+  #lesson-detail .lesson-code-walkthrough {
+    padding: 11px !important;
+    border-radius: 9px !important;
+  }
+  #lesson-detail .content-box p,
+  #lesson-detail .lesson-content p {
+    overflow-wrap: anywhere;
+  }
+}
+</style>
+
 </head>
 
 
@@ -4465,7 +4528,7 @@ function renderLessonEmergencyFallback(language, lesson, error) {
         const title = String(lesson.title || `Untitled ${language} lesson`);
         const description = String(lesson.description || `Learn the key idea in this ${language} lesson.`);
         const rawContent = lesson.content ?? lesson.explanation ?? lesson.learn ?? lesson.lesson_content;
-        const lessonText = lessonContentToReadableText(rawContent).trim() || `### What you'll learn\n${description}\n\nRead the example, identify what each important line does, and predict what the program will display.`;
+        const lessonText = normalizeLessonContentText(rawContent) || `### What you’ll learn\n${description}\n\nRead the example, identify what each important line does, and predict what the program will display.`;
         const code = String(lesson.code || lesson.starter_code || lesson.example_code || lesson.source_code || interactiveLanguageProfile(language).first || "");
         const output = String(lesson.output || "Run the example to see the result.");
 
@@ -7536,25 +7599,194 @@ function lessonOutputForInteractive(code){
   return lesson?.output || 'Run the example to see the result.';
 }
 
-function formatInteractiveLessonContent(value){
-  // Supabase lesson content is authored as text/Markdown. Escape HTML first so
-  // C++ tokens such as <iostream> remain visible instead of being parsed as tags.
-  const escape = value => String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-  const inline = text => escape(text).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  const lines=String(value).replace(/\r/g,'').split('\n');
-  const out=[]; let paragraph=[]; let list=[];
-  const flushParagraph=()=>{if(paragraph.length){out.push('<p>'+paragraph.map(inline).join('<br>')+'</p>');paragraph=[];}};
-  const flushList=()=>{if(list.length){out.push('<ul>'+list.map(item=>'<li>'+inline(item)+'</li>').join('')+'</ul>');list=[];}};
-  for(const raw of lines){
-    const line=raw.trim();
-    if(!line){flushParagraph();flushList();continue;}
-    const heading=line.match(/^(#{1,3})\s+(.+)$/);
-    const bullet=line.match(/^(?:[-*•])\s+(.+)$/);
-    if(heading){flushParagraph();flushList();const level=Math.min(3,heading[1].length);out.push(`<h${level}>${inline(heading[2])}</h${level}>`);}
-    else if(bullet){flushParagraph();list.push(bullet[1]);}
-    else {flushList();paragraph.push(line);}
+function normalizeLessonContentText(value) {
+  // Supabase `content` may be Markdown text or a structured JSON value.
+  // Never stringify an object directly: that produces the unhelpful text "[object Object]".
+  let text = typeof value === "string" ? value : lessonContentToReadableText(value);
+  text = String(text || "")
+    .replace(/^\uFEFF/, "")
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
+    .replace(/\uFFFD/g, "")
+    .replace(/\u00A0/g, " ")
+    .replace(/\u2028|\u2029/g, "\n");
+
+  // Some lesson records contain the escaped characters literally rather than
+  // real newlines/tabs. Convert those into normal readable spacing.
+  text = text
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\n")
+    .replace(/\\t/g, " ")
+    .replace(/\\u([0-9a-f]{4})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+
+  // Some Supabase lesson records contain HTML fragments instead of Markdown.
+  // Convert common semantic tags so lesson notes display as readable text.
+  text = text
+    .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+    .replace(/<\s*\/(?:p|div|section|article|h[1-6]|li|blockquote)\s*>/gi, "\n")
+    .replace(/<\s*h[1-6][^>]*>/gi, "\n### ")
+    .replace(/<\s*li[^>]*>/gi, "\n- ")
+    .replace(/<\s*(?:p|div|section|article|ul|ol|blockquote)[^>]*>/gi, "\n")
+    .replace(/<\s*\/?(?:strong|b)\s*>/gi, "**")
+    .replace(/<\s*\/?(?:em|i)\s*>/gi, "*")
+    .replace(/<\s*\/?code\s*>/gi, "`")
+    .replace(/<\s*\/?pre[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/\n[ \t]*\n[ \t]*\n+/g, "\n\n");
+
+  // Repair common copy/paste encoding artifacts without removing valid code symbols.
+  const repairs = {
+    "â€™": "’", "â€˜": "‘", "â€œ": "“", "â€": "”",
+    "â€“": "–", "â€”": "—", "â€¦": "…", "Â·": "·", "ï»¿": ""
+  };
+  for (const [bad, good] of Object.entries(repairs)) text = text.split(bad).join(good);
+
+  return text
+    .replace(/\\([#*_`])/g, "$1")
+    .replace(/[ \t]+$/gm, "")
+    .replace(/^\s*(?:[-*_]){3,}\s*$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function buildDetailedInteractiveLessonMarkdown(language, lesson, teacher, authoredValue, code) {
+  const title = String(lesson?.title || `This ${language} topic`).trim();
+  const description = String(lesson?.description || "").trim();
+  const authored = normalizeLessonContentText(authoredValue);
+  const outcomes = [
+    `Explain the purpose of ${title} in your own words.`,
+    `Identify the important syntax or behavior in this ${language} example.`,
+    "Predict what a small change will do, then run the code to check your reasoning."
+  ];
+  const sections = [
+    `### What you’ll learn\nBy the end of this lesson, you should be able to:\n${outcomes.map(item => `- ${item}`).join("\n")}`
+  ];
+
+  // Preserve useful lesson content from Supabase, but normalize it first and
+  // remove a duplicate objective heading because the clean heading is above.
+  if (authored) {
+    const notes = authored.split("\n").filter(line =>
+      !/^(?:#{1,6}\s*)?what\s+(?:you(?:'|’)?ll|you will)\s+learn\s*[:：!?.-]*$/i.test(line.trim())
+    );
+    const usefulNotes = notes.join("\n").trim();
+    if (usefulNotes && !/^\[object Object\]$/i.test(usefulNotes)) {
+      sections.push(`### Lesson notes\n${usefulNotes}`);
+    }
   }
-  flushParagraph();flushList();
+
+  // Teacher guidance is topic-specific for the four shipped learning tracks.
+  const coreIdea = teacher?.explain || description || `This lesson introduces ${title}.`;
+  sections.push(`### The core idea\n${coreIdea}`);
+  if (teacher?.teacher) sections.push(`### A useful way to think about it\n${teacher.teacher}`);
+
+  // Explain the actual code supplied for this lesson, rather than only giving
+  // a generic paragraph. Keep the full small example where practical.
+  const codeLines = String(code || "").split(/\r?\n/);
+  const meaningfulLines = codeLines
+    .map((line, index) => ({ line, lineNumber: index + 1 }))
+    .filter(item => item.line.trim())
+    .slice(0, 14);
+  if (meaningfulLines.length) {
+    const walkthrough = meaningfulLines.map(item => {
+      const source = item.line.trim().replace(/`/g, "\\`");
+      let why = "This line contributes one step to the current example.";
+      try { why = explainCodeLine(language, item.line, item.lineNumber, title); } catch (_) {}
+      return `- Line ${item.lineNumber}: \`${source}\` — ${why}`;
+    });
+    if (codeLines.filter(line => line.trim()).length > meaningfulLines.length) {
+      walkthrough.push("- The remaining lines continue the same program structure; trace them in order and check the line explanations shown with the example.");
+    }
+    sections.push(`### Walk through the example\nRead each line from top to bottom. Focus on what it changes, calculates, checks, or displays.\n${walkthrough.join("\n")}`);
+  }
+
+  if (teacher?.watch) sections.push(`### Check your understanding\n${teacher.watch}`);
+  if (teacher?.mistake) sections.push(`### Common mistake to avoid\n${teacher.mistake}`);
+  if (teacher?.mission) sections.push(`### Practice task\n${teacher.mission}`);
+  if (teacher?.remember) sections.push(`### Key takeaway\n${teacher.remember}`);
+
+  return sections.join("\n\n");
+}
+
+function formatInteractiveLessonContent(value){
+  // Render a safe, small Markdown subset. Escape HTML first so C++ tokens such
+  // as <iostream> stay visible, and support headings, ordered/unordered lists,
+  // inline code, emphasis, and fenced code without leaking formatting markers.
+  const normalized = normalizeLessonContentText(value);
+  const escape = text => String(text).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const inline = text => escape(text)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+    .replace(/~~([^~]+)~~/g, '<del>$1</del>');
+  const lines = normalized.replace(/\r/g, "").split("\n");
+  const out = [];
+  let paragraph = [];
+  let list = [];
+  let listType = null;
+  let fenced = false;
+  let codeBuffer = [];
+  const flushParagraph = () => {
+    if (paragraph.length) {
+      out.push('<p>' + paragraph.map(inline).join('<br>') + '</p>');
+      paragraph = [];
+    }
+  };
+  const flushList = () => {
+    if (list.length) {
+      const tag = listType === 'ol' ? 'ol' : 'ul';
+      out.push('<' + tag + '>' + list.map(item => '<li>' + inline(item) + '</li>').join('') + '</' + tag + '>');
+      list = [];
+      listType = null;
+    }
+  };
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (/^```/.test(line)) {
+      flushParagraph(); flushList();
+      if (fenced) {
+        out.push('<pre class="pil-content-code"><code>' + escape(codeBuffer.join('\n')) + '</code></pre>');
+        codeBuffer = [];
+        fenced = false;
+      } else {
+        fenced = true;
+      }
+      continue;
+    }
+    if (fenced) { codeBuffer.push(raw); continue; }
+    if (!line) { flushParagraph(); flushList(); continue; }
+    if (/^(?:---+|___+|\*\*\*+)$/.test(line)) { flushParagraph(); flushList(); continue; }
+
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    const normalizedHeading = heading ? heading[2].replace(/\s*[#*|]+\s*$/, "").trim() : "";
+    const cleanHeading = /^what\s+(?:you(?:'|’)?ll|you will)\s+learn\s*[:：!?.-]*$/i.test(normalizedHeading)
+      ? "What you’ll learn" : normalizedHeading;
+    const bullet = line.match(/^(?:[-*•▪◦])\s+(.+)$/);
+    const numbered = line.match(/^\d+[.)]\s+(.+)$/);
+
+    if (heading) {
+      flushParagraph(); flushList();
+      const level = Math.min(3, heading[1].length);
+      out.push(`<h${level}>${inline(cleanHeading)}</h${level}>`);
+    } else if (bullet || numbered) {
+      flushParagraph();
+      const nextType = numbered ? 'ol' : 'ul';
+      if (list.length && listType !== nextType) flushList();
+      listType = nextType;
+      list.push((bullet || numbered)[1]);
+    } else {
+      flushList();
+      paragraph.push(line);
+    }
+  }
+  if (fenced) out.push('<pre class="pil-content-code"><code>' + escape(codeBuffer.join('\n')) + '</code></pre>');
+  flushParagraph(); flushList();
   return out.join('') || '<p>No lesson explanation is available yet.</p>';
 }
 
@@ -7564,33 +7796,19 @@ function interactiveLessonModel(){
   const lesson=config?.lessons?.[currentLessonIndex];
   if(!lesson || !['C','C++','Python','Java'].includes(language)) return null;
   const title=lesson.title||`This ${language} lesson`;
-  const code=lesson.code || interactiveLanguageProfile(language).first;
+  const code=lesson.code || lesson.starter_code || lesson.example_code || interactiveLanguageProfile(language).first;
   const topic=getInteractiveLessonTopic(lesson,language);
   const model=interactiveQuestionSet(language,topic,title,lesson.description||`This lesson teaches ${title}.`,code);
-  // Prefer authored lesson content when present. Some curriculum entries only
-  // contain title/description/code, and the question bank may not define `learn`;
-  // without this fallback the Learn stage renders an empty explanation panel.
+  // `content` can be plain Markdown or a JSON/JSONB structure returned by
+  // Supabase. Convert both forms safely, then add a topic-specific explanation
+  // and an explanation of the code actually shown for this lesson.
   const authoredContent = lesson.content ?? lesson.explanation ?? lesson.learn ?? lesson.lesson_content;
-  if (authoredContent != null && String(authoredContent).trim()) {
-    model.learn = formatInteractiveLessonContent(authoredContent);
-  } else if (!model.learn || !String(model.learn).trim()) {
-    const teacher = getCurrentTeacherLesson();
-    const sections = [
-      `### What you'll learn\n${lesson.description || `Understand the main idea behind ${title}.`}`,
-      teacher?.explain ? `### Key idea\n${teacher.explain}` : '',
-      teacher?.watch ? `### Try this\n${teacher.watch}` : '',
-      teacher?.mistake ? `### Common mistake\n${teacher.mistake}` : '',
-      teacher?.remember ? `### Remember\n${teacher.remember}` : ''
-    ].filter(Boolean).join('\n\n');
-    model.learn = formatInteractiveLessonContent(sections || `### ${title}\nRead the description, trace the example code, and predict what it does before running it.`);
-  } else {
-    // The existing generated explanation is useful when a question-bank entry has one.
-    model.learn = formatInteractiveLessonContent(model.learn);
-  }
+  const teacher = getCurrentTeacherLesson();
+  const detailedMarkdown = buildDetailedInteractiveLessonMarkdown(language, lesson, teacher, authoredContent, code);
+  model.learn = formatInteractiveLessonContent(detailedMarkdown);
   model.learnTitle = model.learnTitle || title;
   return model;
 }
-
 /* Backwards-compatible name used by the existing lesson renderer. */
 function pythonLessonModel(){ return interactiveLessonModel(); }
 
@@ -7753,8 +7971,93 @@ function pythonLessonBack(){if(pythonLessonStage>0){pythonLessonStage--;renderPy
 .pil-lesson-explanation p { margin: 0 0 10px; }
 .pil-lesson-explanation ul { margin: 8px 0 14px 20px; }
 .pil-lesson-explanation code { padding: 2px 5px; border-radius: 5px; background: #151d2b; color: #9fd0ff; }
+.pil-lesson-explanation ol { margin: 8px 0 14px 22px; padding-left: 4px; }
+.pil-lesson-explanation li { margin: 5px 0; padding-left: 2px; }
+.pil-lesson-explanation .pil-content-code { margin: 10px 0 14px; padding: 13px; overflow-x: auto; border: 1px solid rgba(166,190,219,.12); border-radius: 10px; background: #080d14; color: #e5edf8; font: 12px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre; }
+.pil-lesson-explanation .pil-content-code code { padding: 0; background: transparent; color: inherit; }
 @media (max-width: 750px) { .pil-lesson-explanation { font-size: 15px; line-height: 1.7; } .pil-lesson-explanation h3 { font-size: 17px; } }
 </style>
+
+<style id="shakcode-final-mobile-lesson-width-override">
+/* Last-in-file override: later global mobile rules previously restored wide gutters. */
+@media (max-width: 750px) {
+  .main {
+    width: 100% !important;
+    max-width: none !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    padding-left: 5px !important;
+    padding-right: 5px !important;
+    box-sizing: border-box !important;
+  }
+  #lesson-detail {
+    display: block;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    box-sizing: border-box !important;
+    overflow-x: clip;
+  }
+  #lesson-detail .lesson-header {
+    width: 100% !important;
+    box-sizing: border-box !important;
+    padding-left: 5px !important;
+    padding-right: 5px !important;
+  }
+  #lesson-detail > .lesson-content {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+  }
+  #lesson-detail .lesson-title,
+  #lesson-detail > .lesson-content > .content-box,
+  #lesson-detail > .lesson-content > .challenge {
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+  }
+  #lesson-detail .lesson-teaching-room,
+  #lesson-detail #pythonInteractiveLesson {
+    display: block;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 10px 0 12px !important;
+    padding: 8px !important;
+    box-sizing: border-box !important;
+    border-radius: 12px !important;
+  }
+  #lesson-detail #pilStageBody,
+  #lesson-detail #pilStageBody > * {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  #lesson-detail #pilStageBody .pil-card {
+    width: 100% !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    padding: 11px !important;
+    border-radius: 11px !important;
+  }
+  #lesson-detail #pilStageBody .pil-callout {
+    margin: 10px 0 !important;
+    padding: 10px 11px !important;
+  }
+  #lesson-detail .content-box {
+    padding: 13px 11px !important;
+    margin-bottom: 11px !important;
+    border-radius: 12px !important;
+  }
+  #lesson-detail .blackboard-surface,
+  #lesson-detail .lesson-code-walkthrough {
+    padding: 10px !important;
+  }
+}
+</style>
+
 </body>
 </html>
 
